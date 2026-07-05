@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Smart Safety Helmet — Portal</title>
+<link rel="stylesheet" href="style.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+  <div class="app-layout">
+    <div class="main-column">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-icon">⛑️</span>
+          <div>
+            <h1>Smart Safety Helmet</h1>
+            <p>Live worker health & environment monitoring</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <span id="connStatus" class="status-pill status-connecting">Connecting…</span>
+          <button id="addWorkerBtn" class="btn">+ Add Worker</button>
+        </div>
+      </header>
+
+      <section class="helmet3d-section">
+        <div class="helmet3d-header">
+          <h2>3D Helmet — Live View</h2>
+          <select id="helmet3dSelect">
+            <option value="auto">Auto (most at-risk)</option>
+          </select>
+        </div>
+        <div id="helmet3dContainer" class="helmet3d-canvas"></div>
+        <p class="helmet3d-hint">Drag to rotate the view · scroll to zoom · the helmet spins on its own</p>
+      </section>
+
+      <section class="workers-section">
+        <h2>Workers</h2>
+        <div id="workerGrid" class="worker-grid"></div>
+      </section>
+    </div>
+
+    <aside class="alerts-section">
+      <h2>Alerts</h2>
+      <div id="alertList" class="alert-list"></div>
+    </aside>
+  </div>
+
+  <div id="detailModal" class="modal hidden">
+    <div class="modal-content">
+      <button id="closeModal" class="modal-close">✕</button>
+      <h2 id="modalTitle">Worker</h2>
+      <div class="modal-readings" id="modalReadings"></div>
+      <canvas id="historyChart" height="120"></canvas>
+      <h3 class="table-heading">Reading History</h3>
+      <div class="table-scroll">
+        <table class="history-table" id="historyTable">
+          <thead>
+            <tr>
+              <th>Time</th><th>Pulse</th><th>Skin °C</th><th>Ambient °C</th>
+              <th>Humidity %</th><th>Motion</th><th>Risk</th>
+            </tr>
+          </thead>
+          <tbody id="historyTableBody"></tbody>
+        </table>
+      </div>
+      <button id="deleteWorkerBtn" class="btn btn-danger">Delete Worker</button>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module" src="helmet3d.js"></script>
+  <script src="dashboard.js" defer></script>
+</body>
+</html>
