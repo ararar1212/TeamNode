@@ -66,16 +66,19 @@ void loop() {
   const float humidity = sanitizeFloat(packet.humidity);
   const int pulse = sanitizeInt(packet.bpm);
   const int motion = sanitizeInt(packet.motion);
+  const int fallDetected = sanitizeInt(packet.fall_detected);
 
   // JSON line consumed by the Node server serial bridge.
+  // ===== NEW: Added fall_detected field =====
   Serial.printf(
-    "{\"worker_id\":\"%s\",\"worker_name\":\"%s\",\"pulse\":%d,\"ambient_temp\":%.2f,\"humidity\":%.2f,\"motion\":%d,\"mq135\":%ld,\"mq5\":%ld,\"altitude\":%.2f,\"accel_x\":%.3f,\"accel_y\":%.3f,\"accel_z\":%.3f,\"packet_seq\":%lu}\n",
+    "{\"worker_id\":\"%s\",\"worker_name\":\"%s\",\"pulse\":%d,\"ambient_temp\":%.2f,\"humidity\":%.2f,\"motion\":%d,\"fall_detected\":%d,\"mq135\":%ld,\"mq5\":%ld,\"altitude\":%.2f,\"accel_x\":%.3f,\"accel_y\":%.3f,\"accel_z\":%.3f,\"sequence\":%lu}\n",
     packet.worker_id,
     packet.worker_name,
     pulse,
     ambientTemp,
     humidity,
     motion,
+    fallDetected,
     (long)packet.mq135_val,
     (long)packet.mq5_val,
     sanitizeFloat(packet.altitude),

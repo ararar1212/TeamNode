@@ -43,10 +43,12 @@ function normalizeReading(payload) {
     accel_y: Number(payload.accel_y),
     accel_z: Number(payload.accel_z),
     packet_seq: Number(payload.packet_seq),
+    fall_detected: Number(payload.fall_detected) === 1,  // ===== NEW =====
   };
 }
 
-function classifyIssue(risk) {
+function classifyIssue(risk, fallDetected) {
+  if (fallDetected) return "fall_detected";  // ===== NEW =====
   if (risk.gasSeverity === "danger") return "gas_danger";
   if (risk.gasSeverity === "warning") return "gas_warning";
   if (risk.level === "red") return "risk_red";
@@ -81,6 +83,7 @@ function processIncomingReading(payload, source = "api") {
     heat_index: risk.heatIndex,
     suggestion,
     source,
+    fall_detected: parsed.fall_detected,  // ===== NEW =====
   };
 
   if (!Number.isNaN(parsed.mq135)) reading.mq135 = parsed.mq135;
@@ -97,19 +100,30 @@ function processIncomingReading(payload, source = "api") {
   io.emit("reading", record);
 
   let alert = null;
-  const issueKey = classifyIssue(risk);
+  // ===== NEW: Check for fall first, then other issues =====
+  const issueKey = classifyIssue(risk, parsed.fall_detected);
   if (issueKey) {
     const existing = db.findOpenAlert(parsed.worker_id, issueKey);
     if (!existing) {
-      const isGas = risk.reasons.some(r => r.includes("MQ135") || r.includes("MQ5"));
+      let message = "";
+      let alertSuggestion = suggestion;
+      
+      if (issueKey === "fall_detected") {
+        message = "⚠️ FALL DETECTED — Immediate medical check required!";
+        alertSuggestion = "Check worker status immediately. Assess for injuries and medical needs.";
+      } else {
+        const isGas = risk.reasons.some(r => r.includes("MQ135") || r.includes("MQ5"));
+        message = isGas
+          ? `Harmful gas detected — ${risk.reasons.join(", ")}.`
+          : `Needs medical check-up — ${risk.reasons.join(", ")}.`;
+      }
+      
       alert = db.addAlert({
         worker_id: parsed.worker_id,
-        level: risk.level,
+        level: issueKey === "fall_detected" ? "critical" : risk.level,  // ===== NEW: Fall is critical =====
         issue_key: issueKey,
-        message: isGas
-          ? `Harmful gas detected — ${risk.reasons.join(", ")}.`
-          : `Needs medical check-up — ${risk.reasons.join(", ")}.`,
-        suggestion,
+        message,
+        suggestion: alertSuggestion,
       });
       io.emit("alert", alert);
     }

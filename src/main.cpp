@@ -181,6 +181,7 @@ void setup() {
   if (!bmp180Init()) {
     Serial.println("BMP180 not found");
   }
+  // mpu6050Init() now also calls fallDetectorInit() internally
   if (!mpu6050Init()) {
     Serial.println("MPU6050 not found");
   }
@@ -227,6 +228,10 @@ void loop() {
 
   const unsigned long now = millis();
 
+  // ===== NEW: Detect falls every loop iteration =====
+  bool fallJustDetected = detectFall(accelX, accelY, accelZ);
+  packet.fall_detected = isFalling() ? 1 : 0;
+
   // Drive the siren pattern every loop iteration for smooth pulsing, using the
   // most recently computed risk state.
   updateSiren(alarmActive, now);
@@ -267,7 +272,10 @@ void loop() {
     const int riskScore = computeRiskScore(
         packet.bpm, packet.temperature, packet.humidity, packet.motion,
         packet.mq135_val, packet.mq5_val, isRedLevel);
-    alarmActive = isRedLevel;
+    
+    // ===== NEW: Trigger alarm if fall detected OR risk is high =====
+    alarmActive = isRedLevel || fallJustDetected;
+    
     packet.risk_score = riskScore;
     packet.buzzer_active = alarmActive ? 1 : 0;
 
@@ -289,6 +297,8 @@ void loop() {
     Serial.printf("Motion (m/s2): X: %.2f | Y: %.2f | Z: %.2f | Motion: %d\n",
                   packet.accel_x, packet.accel_y, packet.accel_z,
                   packet.motion);
+    // ===== NEW: Display fall status =====
+    Serial.printf("Fall        : %s\n", packet.fall_detected ? "YES ⚠️" : "no");
     Serial.printf("Risk        : score=%d level=%s buzzer=%s\n",
                   packet.risk_score, isRedLevel ? "RED" : "ok",
                   packet.buzzer_active ? "ON" : "off");
@@ -330,13 +340,9 @@ void loop() {
       display.print(packet.bpm);
       display.println(" bpm");
     } else {
-      display.println("MOTION");
-      display.print("X:");
-      display.print(packet.accel_x, 1);
-      display.print("\nY:");
-      display.println(packet.accel_y, 1);
-      display.print("Z:");
-      display.println(packet.accel_z, 1);
+      // ===== NEW: Add fall status to OLED display =====
+      display.println("-- FALL --");
+      display.print(packet.fall_detected ? "FALL!" : "OK");
     }
 
     display.display();
