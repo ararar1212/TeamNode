@@ -43,7 +43,9 @@ function normalizeReading(payload) {
     accel_y: Number(payload.accel_y),
     accel_z: Number(payload.accel_z),
     packet_seq: Number(payload.packet_seq),
-    fall_detected: Number(payload.fall_detected) === 1,  // ===== NEW =====
+    fall_detected: Number(payload.fall_detected) === 1,
+    gps_lat: payload.gps_lat !== undefined ? Number(payload.gps_lat) : undefined,
+    gps_lng: payload.gps_lng !== undefined ? Number(payload.gps_lng) : undefined,
   };
 }
 
@@ -83,7 +85,9 @@ function processIncomingReading(payload, source = "api") {
     heat_index: risk.heatIndex,
     suggestion,
     source,
-    fall_detected: parsed.fall_detected,  // ===== NEW =====
+    fall_detected: parsed.fall_detected,
+    gps_lat: parsed.gps_lat,
+    gps_lng: parsed.gps_lng,
   };
 
   if (!Number.isNaN(parsed.mq135)) reading.mq135 = parsed.mq135;
@@ -120,10 +124,13 @@ function processIncomingReading(payload, source = "api") {
       
       alert = db.addAlert({
         worker_id: parsed.worker_id,
-        level: issueKey === "fall_detected" ? "critical" : risk.level,  // ===== NEW: Fall is critical =====
+        level: issueKey === "fall_detected" ? "critical" : risk.level,
         issue_key: issueKey,
         message,
         suggestion: alertSuggestion,
+        gps_lat: parsed.gps_lat,
+        gps_lng: parsed.gps_lng,
+        is_fall: issueKey === "fall_detected"
       });
       io.emit("alert", alert);
     }

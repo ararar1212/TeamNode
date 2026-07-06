@@ -159,6 +159,7 @@ function renderAlerts() {
       <div class="alert-time">${new Date(a.ts).toLocaleTimeString()} — ${w ? w.name : a.worker_id}</div>
       <div>${a.message}</div>
       <div class="alert-suggestion"><b>Suggested action:</b> ${a.suggestion || ""}</div>
+      ${a.is_fall && a.gps_lat !== undefined && a.gps_lng !== undefined ? `<div id="map-${a.id}" class="alert-map" style="height: 150px; width: 100%; border-radius: 8px; margin-top: 8px; z-index: 1; cursor: pointer;"></div>` : ""}
       ${!a.resolved ? `<button class="resolve-btn" data-id="${a.id}">Mark resolved</button>` : ""}
       ${a.note ? `<div class="saved-note">📝 ${a.note}</div>` : ""}
       <div class="alert-note-row">
@@ -168,6 +169,28 @@ function renderAlerts() {
     `;
     alertList.appendChild(div);
   });
+
+  // Initialize leaflet maps for fall alerts
+  alerts.forEach(a => {
+    if (a.is_fall && a.gps_lat !== undefined && a.gps_lng !== undefined) {
+      const mapEl = document.getElementById(`map-${a.id}`);
+      if (mapEl && !mapEl._leaflet_id) {
+        const lat = a.gps_lat || 0;
+        const lng = a.gps_lng || 0;
+        const map = L.map(mapEl, { zoomControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false }).setView([lat, lng], 15);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '&copy; OpenStreetMap'
+        }).addTo(map);
+        L.marker([lat, lng]).addTo(map);
+
+        mapEl.onclick = () => {
+          openFullScreenMap(lat, lng);
+        };
+        setTimeout(() => map.invalidateSize(), 100);
+      }
+    }
+  });
+
   alertList.querySelectorAll(".resolve-btn").forEach(btn => {
     btn.onclick = async () => {
       await fetch(`/api/alerts/${btn.dataset.id}/resolve`, { method: "POST" });
@@ -251,16 +274,44 @@ document.getElementById("deleteWorkerBtn").onclick = () => {
   modal.classList.add("hidden");
 };
 
+// ---- Full Screen Map Modal ----
+const mapModal = document.getElementById("mapModal");
+const closeMapModal = document.getElementById("closeMapModal");
+let fullScreenMapInstance = null;
+let fullScreenMarker = null;
+
+function openFullScreenMap(lat, lng) {
+  mapModal.classList.remove("hidden");
+  
+  if (!fullScreenMapInstance) {
+    fullScreenMapInstance = L.map("fullScreenMap").setView([lat, lng], 16);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(fullScreenMapInstance);
+    fullScreenMarker = L.marker([lat, lng]).addTo(fullScreenMapInstance);
+  } else {
+    fullScreenMapInstance.setView([lat, lng], 16);
+    fullScreenMarker.setLatLng([lat, lng]);
+  }
+  
+  setTimeout(() => fullScreenMapInstance.invalidateSize(), 100);
+}
+
+if (closeMapModal) closeMapModal.onclick = () => mapModal.classList.add("hidden");
+if (mapModal) mapModal.onclick = (e) => { if (e.target === mapModal) mapModal.classList.add("hidden"); };
+
 // ---- Add worker ----
-addWorkerBtn.onclick = async () => {
-  const name = prompt("New worker name:");
-  if (!name) return;
-  await fetch("/api/workers", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-};
+if (addWorkerBtn) {
+  addWorkerBtn.onclick = async () => {
+    const name = prompt("New worker name:");
+    if (!name) return;
+    await fetch("/api/workers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+  };
+}
 
 // ---- Live updates via socket ----
 socket.on("reading", (record) => {

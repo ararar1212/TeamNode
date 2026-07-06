@@ -14,9 +14,10 @@ const DB_FILE = path.join(__dirname, "data.json");
 function loadInitial() {
   if (fs.existsSync(DB_FILE)) {
     try {
-      return JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+      fs.unlinkSync(DB_FILE);
+      console.log("Deleted old data.json to start fresh.");
     } catch (e) {
-      console.warn("Could not parse data.json, starting fresh.");
+      console.warn("Could not delete data.json.");
     }
   }
   return {
