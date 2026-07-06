@@ -219,7 +219,9 @@ static void updateBuzzerPattern(bool isFallen, bool isImmobile, unsigned long no
   static int patternPhase = 0;  // 0=beep1, 1=silence1, 2=beep2, 3=long_silence
 
   if (patternCycleStart == 0) {
-    patternCycleStart = now;\n    patternPhase = 0;\n  }
+    patternCycleStart = now;
+    patternPhase = 0;
+ }
 
   unsigned long elapsedInCycle = now - patternCycleStart;
 
