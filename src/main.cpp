@@ -47,12 +47,25 @@ static const uint8_t BUZZER_PIN = 25;
 // Fast continuous beeping. Lower this number for an even more frantic beep.
 static const unsigned long BEEP_TOGGLE_MS = 60;
 
+// Beep-beep pattern (slower than continuous alarm)
+// Pattern: beep 300ms, silence 200ms, beep 300ms, silence 1000ms (then repeat)
+static const unsigned long BEEP_BEEP_ON_MS = 300;
+static const unsigned long BEEP_BEEP_OFF_MS = 200;
+static const unsigned long BEEP_BEEP_LONG_SILENCE_MS = 1000;
+
 static bool alarmActive =
     false; // desired alarm state (what we report to the dashboard)
 static bool sirenRunning =
     false; // whether the beep state machine is currently driving the pin
 static bool buzzerPinState = false;
 static unsigned long sirenLastToggle = 0;
+
+// ===== NEW: Immobility detection state =====
+// Detects if worker fell but is not moving (possible injury)
+static bool fallWithImmobility = false;
+static unsigned long immobilityStartTime = 0;
+static const int IMMOBILITY_MOTION_THRESHOLD = 10;  // Motion must stay below this
+static const unsigned long IMMOBILITY_DETECT_MS = 2000;  // 2 seconds of low motion after fall
 
 // ---- Risk thresholds (mirrors riskScore.js) ----
 static const int MQ135_WARNING = 1600;
@@ -125,10 +138,126 @@ static int computeRiskScore(int pulse, float ambientTemp, float humidity,
   return score;
 }
 
+// ===== NEW: Detect immobility after a fall =====
+// If worker falls but doesn't move for 2+ seconds, it indicates possible injury
+static void updateImmobilityDetection(bool isFallen, int motion, unsigned long now) {
+  if (!isFallen) {
+    // No fall, reset immobility state
+    fallWithImmobility = false;
+    immobilityStartTime = 0;
+    return;
+  }
+
+  // Worker fell. Check if they're immobile (not moving).
+  if (motion < IMMOBILITY_MOTION_THRESHOLD) {
+    if (!fallWithImmobility) {
+      // Just started being immobile after fall
+      immobilityStartTime = now;
+    } else if (now - immobilityStartTime >= IMMOBILITY_DETECT_MS) {
+      // Confirmed: immobile for 2+ seconds after fall → injury likely
+      fallWithImmobility = true;
+      return;
+    }
+  } else {
+    // Worker is moving again, clear immobility detection
+    fallWithImmobility = false;
+    immobilityStartTime = 0;
+  }
+}
+
+// ===== NEW: Update buzzer pattern based on immobility =====
+// - Continuous beeping if just fell (fast beep)
+// - Beep-beep pattern (spaced) if fallen AND immobile (possible injury)
+static void updateBuzzerPattern(bool isFallen, bool isImmobile, unsigned long now) {
+  if (!isFallen) {
+    // No fall, buzzer off
+    alarmActive = false;
+    if (sirenRunning) {
+      sirenRunning = false;
+      buzzerPinState = false;
+      digitalWrite(BUZZER_PIN, LOW);
+    }
+    return;
+  }
+
+  // ===== CASE 1: Fall detected but worker is moving (recovering) =====
+  // Use fast continuous beeping
+  if (!isImmobile) {
+    alarmActive = true;
+    
+    if (!sirenRunning) {
+      sirenRunning = true;
+      sirenLastToggle = now;
+      buzzerPinState = true;
+      digitalWrite(BUZZER_PIN, HIGH);
+      return;
+    }
+
+    // Fast toggle for continuous beeping
+    if (now - sirenLastToggle >= BEEP_TOGGLE_MS) {
+      sirenLastToggle = now;
+      buzzerPinState = !buzzerPinState;
+      digitalWrite(BUZZER_PIN, buzzerPinState ? HIGH : LOW);
+    }
+    return;
+  }
+
+  // ===== CASE 2: Fall detected AND immobile (possible injury) =====
+  // Use slow beep-beep pattern (beep-beep-[long silence]-repeat)
+  alarmActive = true;
+  
+  if (!sirenRunning) {
+    sirenRunning = true;
+    sirenLastToggle = now;
+    buzzerPinState = true;
+    digitalWrite(BUZZER_PIN, HIGH);
+    return;
+  }
+
+  // Beep-beep pattern state machine
+  static unsigned long patternCycleStart = 0;
+  static int patternPhase = 0;  // 0=beep1, 1=silence1, 2=beep2, 3=long_silence
+
+  if (patternCycleStart == 0) {
+    patternCycleStart = now;\n    patternPhase = 0;\n  }
+
+  unsigned long elapsedInCycle = now - patternCycleStart;
+
+  // Calculate phase based on elapsed time
+  unsigned long phase1End = BEEP_BEEP_ON_MS;
+  unsigned long phase2End = phase1End + BEEP_BEEP_OFF_MS;
+  unsigned long phase3End = phase2End + BEEP_BEEP_ON_MS;
+  unsigned long cycleEnd = phase3End + BEEP_BEEP_LONG_SILENCE_MS;
+
+  if (elapsedInCycle >= cycleEnd) {
+    // Cycle complete, restart
+    patternCycleStart = now;
+    elapsedInCycle = 0;
+  }
+
+  // Determine if buzzer should be ON or OFF
+  bool shouldBeOn = false;
+  if (elapsedInCycle < phase1End) {
+    shouldBeOn = true;  // First beep
+  } else if (elapsedInCycle < phase2End) {
+    shouldBeOn = false;  // Silence
+  } else if (elapsedInCycle < phase3End) {
+    shouldBeOn = true;  // Second beep
+  } else {
+    shouldBeOn = false;  // Long silence before repeat
+  }
+
+  if (shouldBeOn != buzzerPinState) {
+    buzzerPinState = shouldBeOn;
+    digitalWrite(BUZZER_PIN, buzzerPinState ? HIGH : LOW);
+  }
+}
+
 // Call this every loop() iteration (not just once a second) so the pulsing is
 // smooth.
 static void updateSiren(bool active, unsigned long now) {
-  alarmActive = active;
+  // This function is now replaced by updateBuzzerPattern() for fall detection
+  // Kept for reference but not called in main loop anymore
 
   if (!active) {
     if (sirenRunning) {
@@ -232,9 +361,11 @@ void loop() {
   bool fallJustDetected = detectFall(accelX, accelY, accelZ);
   packet.fall_detected = isFalling() ? 1 : 0;
 
-  // Drive the siren pattern every loop iteration for smooth pulsing, using the
-  // most recently computed risk state.
-  updateSiren(alarmActive, now);
+  // ===== NEW: Detect immobility after fall =====
+  updateImmobilityDetection(packet.fall_detected, packet.motion, now);
+
+  // ===== NEW: Update buzzer pattern based on fall state =====
+  updateBuzzerPattern(packet.fall_detected, fallWithImmobility, now);
 
   if (now - lastUpdate >= UPDATE_INTERVAL_MS) {
     lastUpdate = now;
@@ -273,8 +404,11 @@ void loop() {
         packet.bpm, packet.temperature, packet.humidity, packet.motion,
         packet.mq135_val, packet.mq5_val, isRedLevel);
     
-    // ===== NEW: Trigger alarm if fall detected OR risk is high =====
-    alarmActive = isRedLevel || fallJustDetected;
+    // ===== UPDATED: Don't override fall-based alarm logic =====
+    // Fall detection buzzer is now managed by updateBuzzerPattern()
+    if (!packet.fall_detected) {
+      alarmActive = isRedLevel;
+    }
     
     packet.risk_score = riskScore;
     packet.buzzer_active = alarmActive ? 1 : 0;
@@ -297,8 +431,10 @@ void loop() {
     Serial.printf("Motion (m/s2): X: %.2f | Y: %.2f | Z: %.2f | Motion: %d\n",
                   packet.accel_x, packet.accel_y, packet.accel_z,
                   packet.motion);
-    // ===== NEW: Display fall status =====
-    Serial.printf("Fall        : %s\n", packet.fall_detected ? "YES ⚠️" : "no");
+    // ===== NEW: Display fall and immobility status =====
+    Serial.printf("Fall        : %s | Immobile: %s\n", 
+                  packet.fall_detected ? "YES ⚠️" : "no",
+                  fallWithImmobility ? "YES (INJURY RISK)" : "no");
     Serial.printf("Risk        : score=%d level=%s buzzer=%s\n",
                   packet.risk_score, isRedLevel ? "RED" : "ok",
                   packet.buzzer_active ? "ON" : "off");
@@ -340,9 +476,19 @@ void loop() {
       display.print(packet.bpm);
       display.println(" bpm");
     } else {
-      // ===== NEW: Add fall status to OLED display =====
+      // ===== NEW: Display fall and immobility status on OLED =====
       display.println("-- FALL --");
-      display.print(packet.fall_detected ? "FALL!" : "OK");
+      if (packet.fall_detected) {
+        if (fallWithImmobility) {
+          display.println("FALL!");
+          display.println("IMMOBILE!");
+        } else {
+          display.println("FALL");
+          display.println("MOVING OK");
+        }
+      } else {
+        display.println("OK");
+      }
     }
 
     display.display();
