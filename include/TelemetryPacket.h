@@ -23,6 +23,7 @@ typedef struct __attribute__((packed)) {
 
   int32_t risk_score;     // 0-100, computed on the sender
   uint8_t buzzer_active;  // 1 if the helmet buzzer is currently sounding, else 0
+  uint8_t fall_detected;  // 1 if a fall was detected recently, else 0
 
   uint32_t sequence;
   uint32_t uptime_ms;
