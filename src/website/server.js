@@ -136,7 +136,8 @@ function processIncomingReading(payload, source = "api") {
         suggestion: alertSuggestion,
         gps_lat: parsed.gps_lat,
         gps_lng: parsed.gps_lng,
-        is_fall: issueKey === "fall_detected"
+        is_fall: issueKey === "fall_detected",
+        is_sos: issueKey === "sos_alert"
       });
       io.emit("alert", alert);
     }

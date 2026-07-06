@@ -159,7 +159,7 @@ function renderAlerts() {
       <div class="alert-time">${new Date(a.ts).toLocaleTimeString()} — ${w ? w.name : a.worker_id}</div>
       <div>${a.message}</div>
       <div class="alert-suggestion"><b>Suggested action:</b> ${a.suggestion || ""}</div>
-      ${a.is_fall && a.gps_lat !== undefined && a.gps_lng !== undefined ? `<div id="map-${a.id}" class="alert-map" style="height: 150px; width: 100%; border-radius: 8px; margin-top: 8px; z-index: 1; cursor: pointer;"></div>` : ""}
+      ${(a.is_fall || a.is_sos) && a.gps_lat !== undefined && a.gps_lng !== undefined ? `<div id="map-${a.id}" class="alert-map" style="height: 150px; width: 100%; border-radius: 8px; margin-top: 8px; z-index: 1; cursor: pointer;"></div>` : ""}
       ${!a.resolved ? `<button class="resolve-btn" data-id="${a.id}">Mark resolved</button>` : ""}
       ${a.note ? `<div class="saved-note">📝 ${a.note}</div>` : ""}
       <div class="alert-note-row">
@@ -170,9 +170,9 @@ function renderAlerts() {
     alertList.appendChild(div);
   });
 
-  // Initialize leaflet maps for fall alerts
+  // Initialize leaflet maps for fall and SOS alerts
   alerts.forEach(a => {
-    if (a.is_fall && a.gps_lat !== undefined && a.gps_lng !== undefined) {
+    if ((a.is_fall || a.is_sos) && a.gps_lat !== undefined && a.gps_lng !== undefined) {
       const mapEl = document.getElementById(`map-${a.id}`);
       if (mapEl && !mapEl._leaflet_id) {
         const lat = a.gps_lat || 0;
