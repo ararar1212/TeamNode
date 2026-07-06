@@ -44,12 +44,14 @@ function normalizeReading(payload) {
     accel_z: Number(payload.accel_z),
     packet_seq: Number(payload.packet_seq),
     fall_detected: Number(payload.fall_detected) === 1,
+    sos_alert: Number(payload.sos_alert) === 1,
     gps_lat: payload.gps_lat !== undefined ? Number(payload.gps_lat) : undefined,
     gps_lng: payload.gps_lng !== undefined ? Number(payload.gps_lng) : undefined,
   };
 }
 
-function classifyIssue(risk, fallDetected) {
+function classifyIssue(risk, fallDetected, sosAlert) {
+  if (sosAlert) return "sos_alert";
   if (fallDetected) return "fall_detected";  // ===== NEW =====
   if (risk.gasSeverity === "danger") return "gas_danger";
   if (risk.gasSeverity === "warning") return "gas_warning";
@@ -86,6 +88,7 @@ function processIncomingReading(payload, source = "api") {
     suggestion,
     source,
     fall_detected: parsed.fall_detected,
+    sos_alert: parsed.sos_alert,
     gps_lat: parsed.gps_lat,
     gps_lng: parsed.gps_lng,
   };
@@ -104,15 +107,18 @@ function processIncomingReading(payload, source = "api") {
   io.emit("reading", record);
 
   let alert = null;
-  // ===== NEW: Check for fall first, then other issues =====
-  const issueKey = classifyIssue(risk, parsed.fall_detected);
+  // ===== NEW: Check for SOS and fall first, then other issues =====
+  const issueKey = classifyIssue(risk, parsed.fall_detected, parsed.sos_alert);
   if (issueKey) {
     const existing = db.findOpenAlert(parsed.worker_id, issueKey);
     if (!existing) {
       let message = "";
       let alertSuggestion = suggestion;
       
-      if (issueKey === "fall_detected") {
+      if (issueKey === "sos_alert") {
+        message = "WORKER#1 SOS!! 🆘";
+        alertSuggestion = "CRITICAL: Worker manually triggered SOS alarm. Dispatch help immediately!";
+      } else if (issueKey === "fall_detected") {
         message = "⚠️ FALL DETECTED — Immediate medical check required!";
         alertSuggestion = "Check worker status immediately. Assess for injuries and medical needs.";
       } else {
@@ -124,7 +130,7 @@ function processIncomingReading(payload, source = "api") {
       
       alert = db.addAlert({
         worker_id: parsed.worker_id,
-        level: issueKey === "fall_detected" ? "critical" : risk.level,
+        level: (issueKey === "fall_detected" || issueKey === "sos_alert") ? "critical" : risk.level,
         issue_key: issueKey,
         message,
         suggestion: alertSuggestion,
