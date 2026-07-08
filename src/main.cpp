@@ -15,6 +15,10 @@
 #include "MQ135Sensor.h"
 #include "MQ5Sensor.h"
 #include "TelemetryPacket.h"
+#include <TinyGPSPlus.h>
+
+static TinyGPSPlus gps;
+static HardwareSerial SerialGPS(2);
 
 static Adafruit_SSD1306 display(128, 64, &Wire, -1);
 
@@ -44,6 +48,15 @@ static const float SEA_LEVEL_PRESSURE_PA = 101325.0f;
 // Change this pin to match your wiring.
 static const uint8_t BUZZER_PIN = 25;
 
+// ---- SOS Button Config ----
+static const uint8_t SOS_BTN_PIN = 12;
+static unsigned long sosStartTime = 0;
+static bool sosActive = false;
+
+// ---- Gas Alarm Config ----
+static unsigned long gasAlarmStartTime = 0;
+static bool gasAlarmActive = false;
+
 // Fast continuous beeping. Lower this number for an even more frantic beep.
 static const unsigned long BEEP_TOGGLE_MS = 60;
 
@@ -64,8 +77,10 @@ static unsigned long sirenLastToggle = 0;
 // Detects if worker fell but is not moving (possible injury)
 static bool fallWithImmobility = false;
 static unsigned long immobilityStartTime = 0;
-static const int IMMOBILITY_MOTION_THRESHOLD = 10;  // Motion must stay below this
-static const unsigned long IMMOBILITY_DETECT_MS = 2000;  // 2 seconds of low motion after fall
+static const int IMMOBILITY_MOTION_THRESHOLD =
+    10; // Motion must stay below this
+static const unsigned long IMMOBILITY_DETECT_MS =
+    2000; // 2 seconds of low motion after fall
 
 // ---- Risk thresholds (mirrors riskScore.js) ----
 static const int MQ135_WARNING = 1600;
@@ -140,7 +155,8 @@ static int computeRiskScore(int pulse, float ambientTemp, float humidity,
 
 // ===== NEW: Detect immobility after a fall =====
 // If worker falls but doesn't move for 2+ seconds, it indicates possible injury
-static void updateImmobilityDetection(bool isFallen, int motion, unsigned long now) {
+static void updateImmobilityDetection(bool isFallen, int motion,
+                                      unsigned long now) {
   if (!isFallen) {
     // No fall, reset immobility state
     fallWithImmobility = false;
@@ -166,9 +182,54 @@ static void updateImmobilityDetection(bool isFallen, int motion, unsigned long n
 }
 
 // ===== NEW: Update buzzer pattern based on immobility =====
+// - Continuous beeping if SOS active
 // - Continuous beeping if just fell (fast beep)
 // - Beep-beep pattern (spaced) if fallen AND immobile (possible injury)
-static void updateBuzzerPattern(bool isFallen, bool isImmobile, unsigned long now) {
+// - Beep-beep pattern if gas alarm active
+static void updateBuzzerPattern(bool isFallen, bool isImmobile, bool isSos, bool isGasAlarm,
+                                unsigned long now) {
+  // ===== CASE 1: SOS Active =====
+  if (isSos) {
+    alarmActive = true;
+    if (!sirenRunning) {
+      sirenRunning = true;
+      sirenLastToggle = now;
+      buzzerPinState = true;
+      digitalWrite(BUZZER_PIN, HIGH);
+      return;
+    }
+    if (now - sirenLastToggle >= BEEP_TOGGLE_MS) {
+      sirenLastToggle = now;
+      buzzerPinState = !buzzerPinState;
+      digitalWrite(BUZZER_PIN, buzzerPinState ? HIGH : LOW);
+    }
+    return;
+  }
+
+  // ===== CASE 2: Gas Alarm =====
+  if (isGasAlarm && !isFallen) {
+    alarmActive = true;
+    if (!sirenRunning) {
+      sirenRunning = true;
+      sirenLastToggle = now;
+      buzzerPinState = true;
+      digitalWrite(BUZZER_PIN, HIGH);
+      return;
+    }
+    // Fast beep-beep pattern for gas
+    static unsigned long gasCycleStart = 0;
+    if (gasCycleStart == 0) gasCycleStart = now;
+    unsigned long elapsed = now - gasCycleStart;
+    if (elapsed >= 1000) { gasCycleStart = now; elapsed = 0; }
+    
+    bool shouldBeOn = (elapsed < 200) || (elapsed >= 300 && elapsed < 500);
+    if (shouldBeOn != buzzerPinState) {
+      buzzerPinState = shouldBeOn;
+      digitalWrite(BUZZER_PIN, buzzerPinState ? HIGH : LOW);
+    }
+    return;
+  }
+
   if (!isFallen) {
     // No fall, buzzer off
     alarmActive = false;
@@ -184,7 +245,7 @@ static void updateBuzzerPattern(bool isFallen, bool isImmobile, unsigned long no
   // Use fast continuous beeping
   if (!isImmobile) {
     alarmActive = true;
-    
+
     if (!sirenRunning) {
       sirenRunning = true;
       sirenLastToggle = now;
@@ -205,7 +266,7 @@ static void updateBuzzerPattern(bool isFallen, bool isImmobile, unsigned long no
   // ===== CASE 2: Fall detected AND immobile (possible injury) =====
   // Use slow beep-beep pattern (beep-beep-[long silence]-repeat)
   alarmActive = true;
-  
+
   if (!sirenRunning) {
     sirenRunning = true;
     sirenLastToggle = now;
@@ -216,12 +277,12 @@ static void updateBuzzerPattern(bool isFallen, bool isImmobile, unsigned long no
 
   // Beep-beep pattern state machine
   static unsigned long patternCycleStart = 0;
-  static int patternPhase = 0;  // 0=beep1, 1=silence1, 2=beep2, 3=long_silence
+  static int patternPhase = 0; // 0=beep1, 1=silence1, 2=beep2, 3=long_silence
 
   if (patternCycleStart == 0) {
     patternCycleStart = now;
     patternPhase = 0;
- }
+  }
 
   unsigned long elapsedInCycle = now - patternCycleStart;
 
@@ -240,13 +301,13 @@ static void updateBuzzerPattern(bool isFallen, bool isImmobile, unsigned long no
   // Determine if buzzer should be ON or OFF
   bool shouldBeOn = false;
   if (elapsedInCycle < phase1End) {
-    shouldBeOn = true;  // First beep
+    shouldBeOn = true; // First beep
   } else if (elapsedInCycle < phase2End) {
-    shouldBeOn = false;  // Silence
+    shouldBeOn = false; // Silence
   } else if (elapsedInCycle < phase3End) {
-    shouldBeOn = true;  // Second beep
+    shouldBeOn = true; // Second beep
   } else {
-    shouldBeOn = false;  // Long silence before repeat
+    shouldBeOn = false; // Long silence before repeat
   }
 
   if (shouldBeOn != buzzerPinState) {
@@ -294,12 +355,15 @@ static void onDataSent(const uint8_t *mac, esp_now_send_status_t status) {
 
 void setup() {
   Serial.begin(115200);
+  SerialGPS.begin(9600);
   delay(500);
 
   Wire.begin();
 
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
+
+  pinMode(SOS_BTN_PIN, INPUT);
 
   dht11Init();
   mq135Init();
@@ -357,17 +421,48 @@ void loop() {
   packet.motion =
       computeMotionLevel(packet.accel_x, packet.accel_y, packet.accel_z);
 
+  while (SerialGPS.available() > 0) {
+    gps.encode(SerialGPS.read());
+  }
+
+  if (gps.location.isValid()) {
+    packet.gps_lat = gps.location.lat();
+    packet.gps_lng = gps.location.lng();
+  } else {
+    packet.gps_lat = 0.0f;
+    packet.gps_lng = 0.0f;
+  }
+
   const unsigned long now = millis();
 
   // ===== NEW: Detect falls every loop iteration =====
   bool fallJustDetected = detectFall(accelX, accelY, accelZ);
   packet.fall_detected = isFalling() ? 1 : 0;
 
+  // ===== NEW: Detect SOS button press =====
+  if (digitalRead(SOS_BTN_PIN) == HIGH) {
+    if (!sosActive) {
+      sosActive = true;
+      sosStartTime = now;
+    }
+  }
+
+  // Auto-clear SOS after 5 seconds of buzzer
+  if (sosActive && (now - sosStartTime >= 5000)) {
+    sosActive = false;
+  }
+  packet.sos_alert = sosActive ? 1 : 0;
+
   // ===== NEW: Detect immobility after fall =====
   updateImmobilityDetection(packet.fall_detected, packet.motion, now);
 
-  // ===== NEW: Update buzzer pattern based on fall state =====
-  updateBuzzerPattern(packet.fall_detected, fallWithImmobility, now);
+  // Auto-clear Gas Alarm after 5 seconds
+  if (gasAlarmActive && (now - gasAlarmStartTime >= 5000)) {
+    gasAlarmActive = false;
+  }
+
+  // ===== NEW: Update buzzer pattern based on fall, SOS, and Gas state =====
+  updateBuzzerPattern(packet.fall_detected, fallWithImmobility, sosActive, gasAlarmActive, now);
 
   if (now - lastUpdate >= UPDATE_INTERVAL_MS) {
     lastUpdate = now;
@@ -405,13 +500,22 @@ void loop() {
     const int riskScore = computeRiskScore(
         packet.bpm, packet.temperature, packet.humidity, packet.motion,
         packet.mq135_val, packet.mq5_val, isRedLevel);
-    
-    // ===== UPDATED: Don't override fall-based alarm logic =====
-    // Fall detection buzzer is now managed by updateBuzzerPattern()
-    if (!packet.fall_detected) {
+
+    // Check for gas anomalies specifically
+    bool gasAnomaly = (packet.mq135_val >= MQ135_WARNING || packet.mq5_val >= MQ5_WARNING);
+    if (gasAnomaly) {
+      if (!gasAlarmActive) {
+        gasAlarmActive = true;
+        gasAlarmStartTime = now;
+      }
+    }
+
+    // ===== UPDATED: Don't override fall-based or SOS-based alarm logic =====
+    // Fall detection, SOS, and gas buzzer are now managed by updateBuzzerPattern()
+    if (!packet.fall_detected && !packet.sos_alert && !gasAlarmActive) {
       alarmActive = isRedLevel;
     }
-    
+
     packet.risk_score = riskScore;
     packet.buzzer_active = alarmActive ? 1 : 0;
 
@@ -433,13 +537,16 @@ void loop() {
     Serial.printf("Motion (m/s2): X: %.2f | Y: %.2f | Z: %.2f | Motion: %d\n",
                   packet.accel_x, packet.accel_y, packet.accel_z,
                   packet.motion);
-    // ===== NEW: Display fall and immobility status =====
-    Serial.printf("Fall        : %s | Immobile: %s\n", 
+    // ===== NEW: Display fall, SOS, and immobility status =====
+    Serial.printf("Fall/SOS    : Fall=%s | Immobile=%s | SOS=%s\n",
                   packet.fall_detected ? "YES ⚠️" : "no",
-                  fallWithImmobility ? "YES (INJURY RISK)" : "no");
+                  fallWithImmobility ? "YES (INJURY RISK)" : "no",
+                  packet.sos_alert ? "ACTIVE 🚨" : "no");
     Serial.printf("Risk        : score=%d level=%s buzzer=%s\n",
                   packet.risk_score, isRedLevel ? "RED" : "ok",
                   packet.buzzer_active ? "ON" : "off");
+    Serial.printf("GPS         : Lat=%.6f | Lng=%.6f\n", packet.gps_lat,
+                  packet.gps_lng);
     Serial.printf("Packet      : seq=%lu uptime=%lu ms\n",
                   (unsigned long)packet.sequence,
                   (unsigned long)packet.uptime_ms);

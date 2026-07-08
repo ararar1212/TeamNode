@@ -67,24 +67,20 @@ void loop() {
   const int pulse = sanitizeInt(packet.bpm);
   const int motion = sanitizeInt(packet.motion);
   const int fallDetected = sanitizeInt(packet.fall_detected);
+  const int sosAlert = sanitizeInt(packet.sos_alert);
 
   // JSON line consumed by the Node server serial bridge.
-  // ===== NEW: Added fall_detected field =====
-  Serial.printf(
-    "{\"worker_id\":\"%s\",\"worker_name\":\"%s\",\"pulse\":%d,\"ambient_temp\":%.2f,\"humidity\":%.2f,\"motion\":%d,\"fall_detected\":%d,\"mq135\":%ld,\"mq5\":%ld,\"altitude\":%.2f,\"accel_x\":%.3f,\"accel_y\":%.3f,\"accel_z\":%.3f,\"sequence\":%lu}\n",
-    packet.worker_id,
-    packet.worker_name,
-    pulse,
-    ambientTemp,
-    humidity,
-    motion,
-    fallDetected,
-    (long)packet.mq135_val,
-    (long)packet.mq5_val,
-    sanitizeFloat(packet.altitude),
-    sanitizeFloat(packet.accel_x),
-    sanitizeFloat(packet.accel_y),
-    sanitizeFloat(packet.accel_z),
-    (unsigned long)packet.sequence
-  );
+  // ===== NEW: Added fall_detected and sos_alert fields =====
+  Serial.print("{\"worker_id\":\"");
+  Serial.print(packet.worker_id);
+  Serial.print("\",\"worker_name\":\"");
+  Serial.print(packet.worker_name);
+  Serial.printf("\",\"pulse\":%d,\"ambient_temp\":%.2f,\"humidity\":%.2f,\"motion\":%d,\"fall_detected\":%d,\"sos_alert\":%d",
+    pulse, ambientTemp, humidity, motion, fallDetected, sosAlert);
+  Serial.printf(",\"mq135\":%ld,\"mq5\":%ld,\"altitude\":%.2f",
+    (long)packet.mq135_val, (long)packet.mq5_val, sanitizeFloat(packet.altitude));
+  Serial.printf(",\"accel_x\":%.3f,\"accel_y\":%.3f,\"accel_z\":%.3f",
+    sanitizeFloat(packet.accel_x), sanitizeFloat(packet.accel_y), sanitizeFloat(packet.accel_z));
+  Serial.printf(",\"sequence\":%lu,\"gps_lat\":%.6f,\"gps_lng\":%.6f}\n",
+    (unsigned long)packet.sequence, sanitizeFloat(packet.gps_lat), sanitizeFloat(packet.gps_lng));
 }
